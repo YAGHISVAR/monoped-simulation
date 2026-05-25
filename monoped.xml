@@ -1,4 +1,4 @@
-<mujoco model="monoped_crank_slider">
+<mujoco model="monoped_bldc_2dof">
 
   <compiler angle="radian" inertiafromgeom="true"/>
 
@@ -10,7 +10,7 @@
 
   <default>
     <joint damping="1.0" armature="0.02"/>
-    <geom contype="1" conaffinity="1" condim="3"
+    <geom contype="0" conaffinity="0" condim="3"
           friction="1.2 0.005 0.0001"
           solimp="0.99 0.999 0.001" solref="0.02 1"/>
     <motor ctrllimited="true" ctrlrange="-1 1"/>
@@ -25,7 +25,9 @@
     <material name="joint_mat"  rgba="0.95 0.50 0.10 1"/>
     <material name="lower_mat"  rgba="0.25 0.25 0.25 1"/>
     <material name="rail_mat"   rgba="0.55 0.55 0.55 0.8"/>
-    <material name="motor_mat"  rgba="0.1 0.75 0.2 1"/>
+    <material name="motor1_mat" rgba="0.1  0.75 0.2  1"/>
+    <material name="motor2_mat" rgba="0.2  0.5  0.9  1"/>
+    <material name="chain_mat"  rgba="0.3  0.3  0.3  0.9"/>
     <material name="pelvis_mat" rgba="0.85 0.15 0.10 1"/>
     <material name="foot_mat"   rgba="0.95 0.50 0.10 1"/>
   </asset>
@@ -41,35 +43,13 @@
     <light directional="true" diffuse="0.3 0.3 0.3"
            pos="3 3 4" dir="-1 -1 -1"/>
 
-    <!--
-      Vertical guide rail (visual only).
-      Spans z = 0.30 → 0.73 to show the pelvis travel range.
-    -->
+    <!-- Vertical guide rail (visual only) -->
     <geom name="rail" type="cylinder" size="0.014 0.180"
-          pos="0 0 0.220" material="rail_mat"
-          contype="0" conaffinity="0"/>
+          pos="0 0 0.220" material="rail_mat"/>
 
     <!--
-      FOOT ANCHOR — fixed to world at the ground (z ≈ 0).
-      The equality constraint pins the rod tip here.
-      Visually: a small flat disc so the grounding point is visible.
-    -->
-    <body name="foot_anchor" pos="0 0 0">
-      <geom name="foot_marker" type="cylinder"
-            size="0.040 0.004" pos="0 0 0.004"
-            material="foot_mat" contype="0" conaffinity="0"/>
-    </body>
-
-    <!--
-      PELVIS (red box) — slides ONLY vertically.
-      Initial rest height: z = L_crank + L_rod = 0.25 + 0.45 = 0.70 m
-      (hip=0, leg straight down, foot on ground).
-
-      The motor and the entire leg mechanism hang from this body.
-      As the hip rotates the crank, the pelvis is forced up/down
-      because the foot is pinned to the ground via equality.
-
-      slide_z range: pelvis can drop ~0.33 m from rest (hip=90°: z≈0.37 m).
+      PELVIS (red) — slides ONLY vertically.
+      Rest height: 2 × L = 2 × 0.20 = 0.40 m  (leg fully straight, foot on floor).
     -->
     <body name="pelvis" pos="0 0 0.40">
       <joint name="slide_z" type="slide"
@@ -81,47 +61,72 @@
             material="pelvis_mat"/>
       <site name="pelvis_site" pos="0 0 0" size="0.012"/>
 
-      <!-- Motor disc visual on pelvis -->
-      <geom name="motor_disc" type="cylinder"
-            size="0.042 0.020" euler="1.5708 0 0"
-            material="motor_mat" contype="0" conaffinity="0"/>
+      <!--
+        MOTOR 1 — BLDC, direct drive on hip.
+        Mounted on pelvis, green disc.
+      -->
+      <geom name="motor1_disc" type="cylinder"
+            size="0.038 0.018" pos="0  0.068 0" euler="1.5708 0 0"
+            material="motor1_mat"/>
 
       <!--
-        UPPER LINK (crank): hip hinge on Y-axis, motor-driven.
-        At hip=0 the crank hangs straight down (-Z).
-        Length = 0.25 m  →  tip at (0,0,-0.25) in upper_link local frame.
+        MOTOR 2 — BLDC, chain drive on knee (connect_hinge).
+        Mounted coaxially on pelvis, blue disc, offset in Y.
+      -->
+      <geom name="motor2_disc" type="cylinder"
+            size="0.032 0.014" pos="0 -0.068 0" euler="1.5708 0 0"
+            material="motor2_mat"/>
+
+      <!--
+        UPPER LINK — driven by Motor 1 (hip hinge, direct drive).
+        L = 0.20 m, hangs straight down at hip = 0.
       -->
       <body name="upper_link" pos="0 0 0">
         <joint name="hip" type="hinge"
                axis="0 1 0" limited="false"
                damping="1.5" stiffness="0.0"/>
 
-        <geom name="hip_sphere" type="sphere" size="0.030"
-              material="joint_mat" contype="0" conaffinity="0"/>
+        <geom name="hip_sphere" type="sphere" size="0.028"
+              material="joint_mat"/>
         <geom name="upper_link_geom" type="cylinder"
-              size="0.022 0.100" pos="0 0 -0.100"
-              material="body_mat" contype="0" conaffinity="0"/>
+              size="0.020 0.100" pos="0 0 -0.100"
+              material="body_mat"/>
+
+        <!-- Chain runs along the side of upper_link to the knee sprocket -->
+        <geom name="chain" type="cylinder"
+              size="0.004 0.096" pos="0.026 0 -0.096"
+              material="chain_mat"/>
 
         <!--
-          LOWER LINK (connecting rod): passive hinge at crank tip.
-          Origin at (0,0,-0.25) in upper_link frame.
-          At init: world pos = (0, 0, 0.45).
-          Rod tip site at (0,0,-0.45) in lower_link frame = (0,0,0) world at init.
-          Equality constraint below pins rod_tip to foot_anchor.
+          LOWER LINK — driven by Motor 2 through chain (connect_hinge).
+          L = 0.20 m.  At init (hip=0, knee=0) hangs straight down.
+          IK: knee_angle = -2 × hip_angle  keeps foot at (0,0,0).
         -->
         <body name="lower_link" pos="0 0 -0.20">
-          <joint name="connect_hinge" type="hinge"
+          <joint name="knee" type="hinge"
                  axis="0 1 0" limited="false"
-                 damping="0.3" stiffness="0.0"/>
+                 damping="0.5" stiffness="0.0"/>
 
-          <geom name="conn_sphere" type="sphere" size="0.022"
-                material="joint_mat" contype="0" conaffinity="0"/>
+          <!-- Knee sprocket (chain terminates here) -->
+          <geom name="knee_sprocket" type="cylinder"
+                size="0.020 0.010" pos="0 0 0" euler="1.5708 0 0"
+                material="motor2_mat"/>
           <geom name="lower_link_geom" type="cylinder"
                 size="0.016 0.100" pos="0 0 -0.100"
-                material="lower_mat" contype="0" conaffinity="0"/>
+                material="lower_mat"/>
 
-          <!-- Rod tip: touches ground at init, pinned there by equality -->
-          <site name="rod_tip" pos="0 0 -0.20" size="0.014"/>
+          <!--
+            FOOT — contact-enabled sphere at link tip.
+            contype/conaffinity = 1 so it collides with the floor.
+            Cylinder (flat disc) keeps contact point well-defined.
+          -->
+          <geom name="foot" type="cylinder"
+                size="0.024 0.005" pos="0 0 -0.195"
+                contype="1" conaffinity="1"
+                friction="1.5 0.01 0.001"
+                material="foot_mat"/>
+
+          <site name="rod_tip" pos="0 0 -0.20" size="0.012"/>
         </body>
       </body>
     </body>
@@ -129,52 +134,36 @@
   </worldbody>
 
   <!--
-    CRANK-SLIDER CONSTRAINT (inverted)
-    Pins the rod tip (lower_link end) to the foot_anchor on the ground.
-    This closes the kinematic loop: crank rotation → pelvis slides in Z.
-
-    anchor = rod tip in lower_link frame = (0,0,-0.45)
-    At init: world pos of anchor = (0,0,0) = foot_anchor origin ✓
-
-    MuJoCo derives the foot_anchor offset automatically from the
-    initial world position of the anchor point.
-  -->
-  <equality>
-    <connect body1="lower_link" body2="foot_anchor"
-             anchor="0 0 -0.20"
-             solimp="0.999 0.9999 0.001 0.5 2"
-             solref="0.005 1"/>
-  </equality>
-
-  <!--
-    SINGLE ACTUATOR — hip motor drives the crank.
-    ctrl[0] in [-1, 1], gear=60 → max torque ±60 Nm.
+    ACTUATORS
+      ctrl[0]  hip_motor   — Motor 1, direct drive,  gear=55 Nm
+      ctrl[1]  knee_motor  — Motor 2, chain drive,   gear=45 Nm
   -->
   <actuator>
-    <motor name="hip_motor" joint="hip" gear="60"
+    <motor name="hip_motor"  joint="hip"  gear="55"
+           ctrllimited="true" ctrlrange="-1 1"/>
+    <motor name="knee_motor" joint="knee" gear="45"
            ctrllimited="true" ctrlrange="-1 1"/>
   </actuator>
 
   <!--
     SENSORS
-    Index layout:
-      [0:3]  imu_accel      (ax, ay, az)
-      [3]    hip_pos        hip angle (rad)
-      [4]    conn_pos       connecting-rod hinge angle (rad)
-      [5]    slide_z_pos    pelvis vertical offset from rest (m)
-      [6]    hip_vel        hip angular velocity
-      [7]    conn_vel       connecting-rod angular velocity
-      [8]    slide_z_vel    pelvis vertical velocity
-      [9:12] rod_tip_pos    world position of rod tip (should stay near 0,0,0)
-      [12:15]pelvis_pos     world position of pelvis
+      [0:3]  imu_accel    (ax, ay, az)
+      [3]    hip_pos      hip angle (rad)
+      [4]    knee_pos     knee angle (rad)
+      [5]    slide_z_pos  pelvis vertical offset from rest (m)
+      [6]    hip_vel
+      [7]    knee_vel
+      [8]    slide_z_vel
+      [9:12] rod_tip_pos  world position of foot tip
+      [12:15]pelvis_pos   world position of pelvis
   -->
   <sensor>
     <accelerometer name="imu_accel"    site="pelvis_site"/>
     <jointpos       name="hip_pos"     joint="hip"/>
-    <jointpos       name="conn_pos"    joint="connect_hinge"/>
+    <jointpos       name="knee_pos"    joint="knee"/>
     <jointpos       name="slide_z_pos" joint="slide_z"/>
     <jointvel       name="hip_vel"     joint="hip"/>
-    <jointvel       name="conn_vel"    joint="connect_hinge"/>
+    <jointvel       name="knee_vel"    joint="knee"/>
     <jointvel       name="slide_z_vel" joint="slide_z"/>
     <framepos       name="rod_tip_pos" objtype="site" objname="rod_tip"/>
     <framepos       name="pelvis_pos"  objtype="site" objname="pelvis_site"/>

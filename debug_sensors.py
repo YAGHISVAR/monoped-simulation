@@ -6,7 +6,7 @@ data  = mujoco.MjData(model)
 mujoco.mj_step(model, data)
 
 print("=" * 55)
-print("  SENSOR MAP — monoped_crank_slider")
+print("  SENSOR MAP — monoped_bldc_2dof")
 print("=" * 55)
 print(f"  sensordata length: {len(data.sensordata)}")
 idx = 0
@@ -37,8 +37,11 @@ print()
 print("=" * 55)
 print("  EQUALITY CONSTRAINTS")
 print("=" * 55)
-for i in range(model.neq):
-    name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_EQUALITY, i)
-    print(f"  eq[{i}]: {name}  active={bool(model.eq_active0[i])}")
+if model.neq == 0:
+    print("  (none — contact physics only)")
+else:
+    for i in range(model.neq):
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_EQUALITY, i)
+        print(f"  eq[{i}]: {name}  active={bool(model.eq_active0[i])}")
 
 print(f"\n  nq={model.nq}  nv={model.nv}  nu={model.nu}  neq={model.neq}")
