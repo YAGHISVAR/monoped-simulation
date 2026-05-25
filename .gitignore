@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.env
+MUJOCO_LOG.TXT
+screenshot.png
+*.swp
