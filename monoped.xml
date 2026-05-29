@@ -53,7 +53,7 @@
     -->
     <body name="pelvis" pos="0 0 0.40">
       <joint name="slide_z" type="slide"
-             axis="0 0 1" range="-0.34 0.02"
+             axis="0 0 1" range="-0.34 2.00"
              damping="0.8" stiffness="0.0"/>
 
       <geom name="pelvis_geom" type="box"
