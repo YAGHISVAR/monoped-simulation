@@ -4,23 +4,34 @@ Monoped — Autonomous Sit-Stand Trajectory
 Automatically cycles between sit (0.12 m) and stand (0.36 m) using a
 trapezoidal velocity profile.  No user input needed — just watch it go.
 
-Profile parameters:
-  V_MAX = 0.15 m/s  (cruise speed)
-  A_MAX = 0.20 m/s² (acceleration / deceleration)
+Profile parameters (slowed down):
+  V_MAX = 0.06 m/s  (cruise speed)
+  A_MAX = 0.06 m/s² (acceleration / deceleration)
+
+Live matplotlib plot shows commanded vs actual pelvis height.
 """
 
 import mujoco
 import mujoco.viewer
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+
+matplotlib.use("TkAgg")   # works alongside MuJoCo's passive viewer
 
 # ── Mechanism constants ────────────────────────────────────────
 L            = 0.20
 HEIGHT_SIT   = 0.12   # m — crouched
 HEIGHT_STAND = 0.36   # m — upright
-HOLD_TIME    = 1.0    # s — pause at each end before reversing
+HOLD_TIME    = 1.5    # s — pause at each end before reversing
 
-TRAP_V_MAX = 0.15     # m/s
-TRAP_A_MAX = 0.20     # m/s²
+# ── Slowed-down trapezoidal profile ───────────────────────────
+TRAP_V_MAX = 0.06     # m/s  (was 0.15)
+TRAP_A_MAX = 0.06     # m/s² (was 0.20)
+
+# ── Plot update interval (sim-seconds between redraws) ────────
+PLOT_INTERVAL = 0.05  # s  → ~20 fps refresh
 
 
 def fk_pelvis_z(hip: float) -> float:
@@ -84,6 +95,75 @@ class PID:
                        -self.limit, self.limit)
 
 
+# ── Live matplotlib figure ─────────────────────────────────────
+plt.ion()
+fig = plt.figure(figsize=(8, 4), facecolor="#1e1e2e")
+fig.canvas.manager.set_window_title("Sit-Stand — Live Position")
+
+gs  = gridspec.GridSpec(1, 1, figure=fig)
+ax  = fig.add_subplot(gs[0])
+ax.set_facecolor("#1e1e2e")
+for spine in ax.spines.values():
+    spine.set_edgecolor("#6c7086")
+
+ax.set_title("Pelvis Height (live)", color="#cdd6f4", fontsize=13, pad=8)
+ax.set_xlabel("Simulation time  (s)", color="#a6adc8")
+ax.set_ylabel("Height  (m)",          color="#a6adc8")
+ax.tick_params(colors="#a6adc8")
+ax.set_ylim(0.05, 0.42)
+ax.set_xlim(0, 20)
+
+# Reference lines
+ax.axhline(HEIGHT_STAND, color="#a6e3a1", linestyle="--",
+           linewidth=1, alpha=0.5, label=f"Stand ref  {HEIGHT_STAND} m")
+ax.axhline(HEIGHT_SIT,   color="#f38ba8", linestyle="--",
+           linewidth=1, alpha=0.5, label=f"Sit ref  {HEIGHT_SIT} m")
+
+# Live data lines
+line_cmd, = ax.plot([], [], color="#89b4fa", linewidth=1.8, label="Commanded")
+line_act, = ax.plot([], [], color="#fab387", linewidth=1.5,
+                    linestyle=":", label="Actual")
+
+ax.legend(facecolor="#313244", edgecolor="#6c7086",
+          labelcolor="#cdd6f4", fontsize=9, loc="upper right")
+
+fig.tight_layout(pad=1.5)
+fig.canvas.draw()
+plt.pause(0.001)
+
+# Scrolling window width (seconds shown at once)
+WINDOW = 20.0
+
+# Data buffers
+buf_t   = []
+buf_cmd = []
+buf_act = []
+
+
+def update_plot(t_sim: float, h_cmd: float, h_act: float) -> None:
+    """Append new sample and redraw the live plot."""
+    buf_t.append(t_sim)
+    buf_cmd.append(h_cmd)
+    buf_act.append(h_act)
+
+    arr_t   = np.asarray(buf_t)
+    arr_cmd = np.asarray(buf_cmd)
+    arr_act = np.asarray(buf_act)
+
+    # Scrolling x-axis
+    x_max = max(t_sim, WINDOW)
+    x_min = x_max - WINDOW
+    ax.set_xlim(x_min, x_max)
+
+    # Only draw the visible slice for performance
+    mask = arr_t >= x_min
+    line_cmd.set_data(arr_t[mask], arr_cmd[mask])
+    line_act.set_data(arr_t[mask], arr_act[mask])
+
+    fig.canvas.draw_idle()
+    fig.canvas.flush_events()
+
+
 # ── Load model ─────────────────────────────────────────────────
 model = mujoco.MjModel.from_xml_path("monoped.xml")
 data  = mujoco.MjData(model)
@@ -100,20 +180,22 @@ pid_knee = PID(Kp=7.0, Ki=0.05, Kd=0.60, dt=dt)
 S_HIP, S_KNEE = 3, 4
 
 # ── Trajectory state machine ───────────────────────────────────
-# Alternate targets: STAND → SIT → STAND → ...
 targets  = [HEIGHT_STAND, HEIGHT_SIT]
-phase    = 0                                     # index into targets[]
+phase    = 0
 traj     = TrapezoidalTrajectory(HEIGHT_STAND, HEIGHT_SIT)
-t_start  = 0.5                                   # let physics settle first
+t_start  = 0.5
 holding  = False
 hold_end = 0.0
 
-print("=" * 52)
-print("  Monoped — Sit-Stand Trajectory")
-print(f"  stand={HEIGHT_STAND} m  sit={HEIGHT_SIT} m")
-print(f"  V_MAX={TRAP_V_MAX} m/s  A_MAX={TRAP_A_MAX} m/s²")
+print("=" * 60)
+print("  Monoped — Sit-Stand Trajectory  (SLOW)")
+print(f"  stand={HEIGHT_STAND} m   sit={HEIGHT_SIT} m")
+print(f"  V_MAX={TRAP_V_MAX} m/s   A_MAX={TRAP_A_MAX} m/s²")
 print(f"  move time (full stroke): {traj.t_total:.2f} s")
-print("=" * 52)
+print("=" * 60)
+
+log_t    = -1.0
+plot_t   = -1.0
 
 # ── Simulation loop ────────────────────────────────────────────
 with mujoco.viewer.launch_passive(model, data) as viewer:
@@ -122,19 +204,16 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
     viewer.cam.distance  = 1.6
     viewer.cam.lookat[:] = [0, 0, 0.25]
 
-    log_t = -1.0
-
     while viewer.is_running():
         t = data.time
 
-        # ── Settle: hold standing for the first 0.5 s ──────────
+        # ── Settle ─────────────────────────────────────────────
         if t < t_start:
             h_cmd = HEIGHT_STAND
 
         elif holding:
             h_cmd = targets[phase]
             if t >= hold_end:
-                # Switch to next target and build new trajectory
                 phase    = 1 - phase
                 src      = targets[1 - phase]
                 dst      = targets[phase]
@@ -143,15 +222,11 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
                 holding  = False
                 label    = "STAND" if dst == HEIGHT_STAND else "SIT"
                 print(f"  t={t:.2f}s → {label} ({dst:.2f} m)  "
-                      f"t_acc={traj.t_acc:.2f}s  "
-                      f"t_cruise={traj.t_cruise:.2f}s  "
                       f"t_total={traj.t_total:.2f}s")
 
         else:
             elapsed = t - t_start
             h_cmd   = traj.position(elapsed)
-
-            # Trajectory complete — enter hold
             if elapsed >= traj.t_total:
                 holding  = True
                 hold_end = t + HOLD_TIME
@@ -168,10 +243,20 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         mujoco.mj_step(model, data)
         viewer.sync()
 
+        # ── Live plot update ────────────────────────────────────
+        if t - plot_t >= PLOT_INTERVAL:
+            plot_t = t
+            h_act  = fk_pelvis_z(hip_now)
+            update_plot(t, h_cmd, h_act)
+
+        # ── Console log ────────────────────────────────────────
         if t - log_t >= 0.5:
             log_t = t
-            pz    = fk_pelvis_z(hip_now)
+            h_act = fk_pelvis_z(hip_now)
             state = "HOLD" if holding else "MOVE"
             print(f"  [{state}] t={t:6.2f}s | "
-                  f"pelvis={pz:.3f}m  ref={h_cmd:.3f}m  "
-                  f"err={targets[phase]-pz:+.4f}m")
+                  f"pelvis={h_act:.3f}m  ref={h_cmd:.3f}m  "
+                  f"err={h_cmd-h_act:+.4f}m")
+
+plt.ioff()
+plt.show()
